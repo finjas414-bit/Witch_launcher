@@ -43,10 +43,8 @@ BOOL isJITEnabled(BOOL checkCSFlags) {
         return NO;
     }
     if (!DeviceHasJITFlags(JIT_FLAG_FORCE_MIRRORED | JIT_FLAG_HAS_TXM)) {
-        // Device below iOS 26 or without TXM is sufficient at this point
         return YES;
     }
-    // Device with iOS 26+ and TXM requires a debugger attached for JIT script to bypass TXM restrictions
     return JIT26IsLikelyDebuggerKeepAttached();
 }
 
@@ -99,7 +97,6 @@ NSMutableDictionary* parseJSONFromFile(NSString *path) {
 }
 
 NSError* saveJSONToFile(NSDictionary *dict, NSString *path) {
-    // TODO: handle rename
     NSError *error;
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:dict options:NSJSONWritingPrettyPrinted error:&error];
     if (jsonData == nil) {
@@ -145,7 +142,6 @@ CGFloat MathUtils_dist(CGFloat x1, CGFloat y1, CGFloat x2, CGFloat y2) {
     return (CGFloat) hypot(x, y);
 }
 
-//Ported from https://www.arduino.cc/reference/en/language/functions/math/map/
 CGFloat MathUtils_map(CGFloat x, CGFloat in_min, CGFloat in_max, CGFloat out_min, CGFloat out_max) {
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
@@ -203,7 +199,6 @@ void JIT26SendJITScript(NSString* script) {
 }
 
 BOOL DeviceCanCreateRXMap(void) {
-    // This is only guaranteed to be accurate when JIT is already enabled. Obviously this is only useful for vphone and similar internal environments where JIT is always enabled.
     uint32_t *map = mmap(NULL, getpagesize(), PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
     if (map == MAP_FAILED) {
         NSLog(@"DeviceCanCreateRXMap: mmap failed: %s", strerror(errno));
@@ -223,7 +218,6 @@ static NSString* hardwareMachineIdentifier(void) {
     return @(buffer);
 }
 
-// "iPhone13,2" -> 13.2 ; "iPad8,11" -> 8.11 (same parsing as StikDebug)
 static double hardwareDeviceVersion(NSString *identifier) {
     if (!identifier) return -1;
     NSCharacterSet *nonNumbers = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789,"] invertedSet];
@@ -235,20 +229,17 @@ static double hardwareDeviceVersion(NSString *identifier) {
 static BOOL DeviceLikelyHasTXMFromChipID(void) {
     NSUInteger (*MGGetSInt64Answer)(NSString *) = dlsym(RTLD_DEFAULT, "MGGetSint64Answer");
     if (MGGetSInt64Answer == NULL) {
-        // Failing closed would select the legacy mapping path on the exact
-        // systems where Apple made Preboot unreadable. Prefer the TXM-safe
-        // path on recent systems when MobileGestalt is unavailable.
         if (@available(iOS 19.0, *)) return YES;
         return NO;
     }
 
     switch (MGGetSInt64Answer(@"ChipID")) {
-        case 0x8020: // A12
-        case 0x8027: // A12X/Z
+        case 0x8020:
+        case 0x8027:
             return NO;
-        case 0x8030: // A13
-        case 0x8101: // A14
-        case 0x8103: // M1
+        case 0x8030:
+        case 0x8101:
+        case 0x8103:
             if (@available(iOS 27.0, *)) return YES;
             return NO;
         default:
@@ -258,20 +249,11 @@ static BOOL DeviceLikelyHasTXMFromChipID(void) {
 }
 
 BOOL DeviceHasTXMReal(void) {
-    // The launcher's TXM classification MUST match the debugger's (StikDebug
-    // 3.1.6+, ProcessInfo+TXM.swift / PR #416): StikDebug decides whether to
-    // run the app's JIT26 universal script from its own TXM detection, while
-    // this app decides whether to send the brk 0x69/0xf00d protocol from
-    // these flags. Any mismatch leaves the handshake unanswered (hang or
-    // "switch to Universal script") or grants plain JIT on a W^X-enforced
-    // device (SIGBUS/SIGSEGV).
     if (getPrefBool(@"debug.force_txm")) {
         NSLog(@"[JIT] TXM forced via debug.force_txm");
         return YES;
     }
 
-    // Try the direct active-Preboot path before falling back to legacy
-    // directory enumeration.
     static const char *modernTXMPath =
         "/System/Volumes/Preboot/boot/usr/standalone/firmware/FUD/"
         "Ap,TrustedExecutionMonitor.img4";
@@ -279,8 +261,6 @@ BOOL DeviceHasTXMReal(void) {
 
     DIR *d = opendir("/private/preboot");
     if (!d) {
-        // /private/preboot is no longer readable on iOS 26.6 and iOS 27.
-        // Fall back to a conservative hardware/OS heuristic.
         return DeviceLikelyHasTXMFromChipID();
     }
 
@@ -303,7 +283,6 @@ BOOL DeviceHasTXMReal(void) {
     return hasTXM;
 }
 
-// Thin wrapper of DeviceHasJITFlags to respect overriden flag
 BOOL DeviceHasTXM(void) {
     return DeviceHasJITFlags(JIT_FLAG_HAS_TXM);
 }
@@ -349,14 +328,10 @@ BOOL DeviceHasJITFlags(JITFlags flags) {
 }
 
 BOOL DeviceNeedsDebugJITMapping(void) {
-    // This is a capability decision, not a TXM firmware-detection decision.
-    // MirrorMappedCodeCache now means that the Universal JIT script has been
-    // installed and HotSpot may request its RX mapping from the debugger.
     return DeviceHasJITFlags(JIT_FLAG_IS_IOS_26 | JIT_FLAG_FORCE_MIRRORED);
 }
 
 BOOL JIT26IsLikelyDebuggerKeepAttached(void) {
-    // getppid() always returns launchd PID (1) unless debugger is actively attached
     return getppid() != 1;
 }
 
