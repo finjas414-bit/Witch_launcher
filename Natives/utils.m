@@ -1,29 +1,35 @@
 #import <SafariServices/SafariServices.h>
 
-#include "jni.h"
-#include <dlfcn.h>
-#include <os/lock.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <dirent.h>
-#include <sys/sysctl.h>
+# include "jni.h"
+# include <dlfcn.h>
+# include <os/lock.h>
+# include <stdio.h>
+# include <stdlib.h>
+# include <unistd.h>
+# include <dirent.h>
+# include <sys/sysctl.h>
 
-#include "utils.h"
-#import "LauncherPreferences.h"
+# include "utils.h"
+# import "LauncherPreferences.h"
 
 CFTypeRef SecTaskCopyValueForEntitlement(void* task, NSString* entitlement, CFErrorRef  _Nullable *error);
 void* SecTaskCreateFromSelf(CFAllocatorRef allocator);
 
 BOOL getEntitlementValue(NSString *key) {
     void *secTask = SecTaskCreateFromSelf(NULL);
+    if (secTask == NULL) {
+        return NO;
+    }
+
     CFTypeRef value = SecTaskCopyValueForEntitlement(secTask, key, nil);
     CFRelease(secTask);
     if (value == nil) {
         return NO;
     }
+
+    BOOL result = ![(__bridge id)value isKindOfClass:NSNumber.class] || [(__bridge id)value boolValue];
     CFRelease(value);
-    return ![(__bridge id)value isKindOfClass:NSNumber.class] || [(__bridge id)value boolValue];
+    return result;
 }
 
 BOOL isJITEnabled(BOOL checkCSFlags) {
@@ -80,16 +86,16 @@ NSMutableDictionary* parseJSONFromFile(NSString *path) {
     NSString *content = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:&error];
     if (content == nil) {
         NSLog(@"[ParseJSON] Error: could not read %@: %@", path, error.localizedDescription);
-        return @{@"NSErrorObject": error}.mutableCopy;
+        return nil;
     }
 
     NSData* data = [content dataUsingEncoding:NSUTF8StringEncoding];
-    NSMutableDictionary *dict = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:&error];
-    if (error) {
-        NSLog(@"[ParseJSON] Error: could not parse JSON: %@", error.localizedDescription);
-        return @{@"NSErrorObject": error}.mutableCopy;
+    id object = [NSJSONSerialization JSONObjectWithData:data options:NSJSONReadingMutableContainers error:&error];
+    if (error || ![object isKindOfClass:[NSDictionary class]]) {
+        NSLog(@"[ParseJSON] Error: could not parse %@: %@", path, error.localizedDescription);
+        return nil;
     }
-    return dict;
+    return [(NSDictionary *)object mutableCopy];
 }
 
 NSError* saveJSONToFile(NSDictionary *dict, NSString *path) {
@@ -353,3 +359,4 @@ BOOL JIT26IsLikelyDebuggerKeepAttached(void) {
     // getppid() always returns launchd PID (1) unless debugger is actively attached
     return getppid() != 1;
 }
+
