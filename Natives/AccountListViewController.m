@@ -17,6 +17,26 @@
 
 @implementation AccountListViewController
 
+- (BOOL)isValidAccountDictionary:(id)object {
+    if (![object isKindOfClass:[NSDictionary class]]) {
+        return NO;
+    }
+    NSDictionary *account = (NSDictionary *)object;
+    id username = account[@"username"];
+    return [username isKindOfClass:[NSString class]] && ((NSString *)username).length > 0;
+}
+
+- (NSDictionary *)safeAccountAtIndex:(NSInteger)index {
+    if (index < 0 || index >= self.accountList.count) {
+        return nil;
+    }
+    id account = self.accountList[index];
+    if (![self isValidAccountDictionary:account]) {
+        return nil;
+    }
+    return (NSDictionary *)account;
+}
+
 - (void)viewDidLoad {
     [super viewDidLoad];
 
@@ -48,9 +68,7 @@
         [fm fileExistsAtPath:path isDirectory:(&isDir)];
         if (!isDir && [file hasSuffix:@".json"]) {
             NSDictionary *account = parseJSONFromFile(path);
-            if ([account isKindOfClass:[NSDictionary class]] &&
-                [account[@"username"] isKindOfClass:[NSString class]] &&
-                ((NSString *)account[@"username"]).length > 0) {
+            if ([self isValidAccountDictionary:account]) {
                 [self.accountList addObject:account];
             } else {
                 NSLog(@"[Accounts] Ignoring invalid account file: %@", path);
@@ -80,22 +98,32 @@
         return cell;
     }
 
-    NSDictionary *selected = self.accountList[indexPath.row];
-    // By default, display the saved username
-    cell.textLabel.text = selected[@"username"];
-    if ([selected[@"username"] hasPrefix:@"Demo."]) {
-        // Remove the prefix "Demo."
-        cell.textLabel.text = [selected[@"username"] substringFromIndex:5];
+    NSDictionary *selected = [self safeAccountAtIndex:indexPath.row];
+    if (selected == nil) {
+        cell.textLabel.text = localize(@"login.option.add", nil);
+        cell.detailTextLabel.text = nil;
+        cell.imageView.image = nil;
+        return cell;
+    }
+
+    NSString *username = selected[@"username"];
+    cell.textLabel.text = username;
+    if ([username hasPrefix:@"Demo."]) {
+        cell.textLabel.text = [username substringFromIndex:5];
         cell.detailTextLabel.text = localize(@"login.option.demo", nil);
     } else if (selected[@"xboxGamertag"] == nil) {
         cell.detailTextLabel.text = localize(@"login.option.local", nil);
     } else {
-        // Display the Xbox gamertag for online accounts
         cell.detailTextLabel.text = selected[@"xboxGamertag"];
     }
 
     cell.imageView.contentMode = UIViewContentModeCenter;
-    [cell.imageView setImageWithURL:[NSURL URLWithString:[selected[@"profilePicURL"] stringByReplacingOccurrencesOfString:@"\\/" withString:@"/"]] placeholderImage:[UIImage imageNamed:@"DefaultAcc"]];
+    NSString *avatarURL = selected[@"profilePicURL"];
+    if ([avatarURL isKindOfClass:[NSString class]] && avatarURL.length > 0) {
+        [cell.imageView setImageWithURL:[NSURL URLWithString:[avatarURL stringByReplacingOccurrencesOfString:@"\\/" withString:@"/"]] placeholderImage:[UIImage imageNamed:@"DefaultAcc"]];
+    } else {
+        cell.imageView.image = [UIImage imageNamed:@"DefaultAcc"];
+    }
 
     return cell;
 }
@@ -109,6 +137,11 @@
         return;
     }
 
+    NSDictionary *selected = [self safeAccountAtIndex:indexPath.row];
+    if (selected == nil) {
+        return;
+    }
+
     self.modalInPresentation = YES;
     self.tableView.userInteractionEnabled = NO;
     [self addActivityIndicatorTo:cell];
@@ -118,21 +151,30 @@
             [self callbackMicrosoftAuth:status success:success forCell:cell];
         });
     };
-    [[BaseAuthenticator loadSavedName:self.accountList[indexPath.row][@"username"]] refreshTokenWithCallback:callback];
+    NSString *username = selected[@"username"];
+    [[BaseAuthenticator loadSavedName:username] refreshTokenWithCallback:callback];
 }
 
 - (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath {
     if (editingStyle == UITableViewCellEditingStyleDelete) {
-        // TODO: invalidate token
+        NSDictionary *selected = [self safeAccountAtIndex:indexPath.row];
+        if (selected == nil) {
+            return;
+        }
 
-        NSString *str = self.accountList[indexPath.row][@"username"];
+        NSString *str = selected[@"username"];
         NSFileManager *fm = [NSFileManager defaultManager];
-        NSString *path = [NSString stringWithFormat:@"%s/accounts/%@.json", getenv("POJAV_HOME"), str];
+        const char *home = getenv("POJAV_HOME");
+        if (home == NULL || home[0] == '\0') {
+            return;
+        }
+
+        NSString *path = [NSString stringWithFormat:@"%s/accounts/%@.json", home, str];
         if (self.whenDelete != nil) {
             self.whenDelete(str);
         }
-        NSString *xuid = self.accountList[indexPath.row][@"xuid"];
-        if (xuid) {
+        NSString *xuid = selected[@"xuid"];
+        if ([xuid isKindOfClass:[NSString class]] && xuid.length > 0) {
             [MicrosoftAuthenticator clearTokenDataOfProfile:xuid];
         }
         [fm removeItemAtPath:path error:nil];
@@ -203,7 +245,9 @@
             [self presentViewController:controller animated:YES completion:nil];
         } else {
             id callback = ^(id status, BOOL success) {
-                self.whenItemSelected();
+                if (self.whenItemSelected != nil) {
+                    self.whenItemSelected();
+                }
                 [self dismissViewControllerAnimated:YES completion:nil];
             };
             [[[LocalAuthenticator alloc] initWithInput:usernameField.text] loginWithCallback:callback];
@@ -227,7 +271,6 @@
             }
             return;
         }
-        // NSLog(@"URL returned = %@", [callbackURL absoluteString]);
 
         NSDictionary *queryItems = [self parseQueryItems:callbackURL.absoluteString];
         if (queryItems[@"code"]) {
@@ -247,7 +290,6 @@
             [[[MicrosoftAuthenticator alloc] initWithInput:queryItems[@"code"]] loginWithCallback:callback];
         } else {
             if ([queryItems[@"error"] hasPrefix:@"access_denied"]) {
-                // Ignore access denial responses
                 return;
             }
             showDialog(localize(@"Error", nil), queryItems[@"error_description"]);
@@ -263,6 +305,9 @@
 }
 
 - (void)addActivityIndicatorTo:(UITableViewCell *)cell {
+    if (cell == nil) {
+        return;
+    }
     UIActivityIndicatorViewStyle indicatorStyle = UIActivityIndicatorViewStyleMedium;
     UIActivityIndicatorView *indicator = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:indicatorStyle];
     cell.accessoryView = indicator;
@@ -271,27 +316,38 @@
 }
 
 - (void)removeActivityIndicatorFrom:(UITableViewCell *)cell {
+    if (cell == nil) {
+        return;
+    }
     UIActivityIndicatorView *indicator = (id)cell.accessoryView;
-    [indicator stopAnimating];
+    if ([indicator isKindOfClass:[UIActivityIndicatorView class]]) {
+        [indicator stopAnimating];
+    }
     cell.accessoryView = nil;
 }
 
 - (void)callbackMicrosoftAuth:(id)status success:(BOOL)success forCell:(UITableViewCell *)cell {
     if (status != nil) {
         if (success) {
-            cell.detailTextLabel.text = status;
+            if ([cell isKindOfClass:[UITableViewCell class]]) {
+                cell.detailTextLabel.text = status;
+            }
         } else {
             self.modalInPresentation = NO;
             self.tableView.userInteractionEnabled = YES;
             [self removeActivityIndicatorFrom:cell];
-            cell.detailTextLabel.text = [status localizedDescription];
+            if ([cell isKindOfClass:[UITableViewCell class]]) {
+                cell.detailTextLabel.text = [status localizedDescription];
+            }
             NSData *errorData = ((NSError *)status).userInfo[AFNetworkingOperationFailingURLResponseDataErrorKey];
             NSString *errorStr = [[NSString alloc] initWithData:errorData encoding:NSUTF8StringEncoding];
             NSLog(@"[MSA] Error: %@", errorStr);
             showDialog(localize(@"Error", nil), errorStr);
         }
     } else if (success) {
-        self.whenItemSelected();
+        if (self.whenItemSelected != nil) {
+            self.whenItemSelected();
+        }
         [self removeActivityIndicatorFrom:cell];
         [self dismissViewControllerAnimated:YES completion:nil];
     }
@@ -304,6 +360,9 @@
 
 #pragma mark - ASWebAuthenticationPresentationContextProviding
 - (ASPresentationAnchor)presentationAnchorForWebAuthenticationSession:(ASWebAuthenticationSession *)session {
+    if (UIApplication.sharedApplication.windows.count == 0) {
+        return nil;
+    }
     return UIApplication.sharedApplication.windows.firstObject;
 }
 
