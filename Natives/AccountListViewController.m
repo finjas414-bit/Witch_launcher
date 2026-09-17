@@ -27,15 +27,34 @@
     }
 
     // List accounts
-    NSString *listPath = [NSString stringWithFormat:@"%s/accounts", getenv("POJAV_HOME")];
+    const char *home = getenv("POJAV_HOME");
+    if (home == NULL || home[0] == '\0') {
+        NSLog(@"[Accounts] POJAV_HOME is missing; skipping account list load");
+        [self.tableView setSeparatorStyle:UITableViewCellSeparatorStyleSingleLine];
+        return;
+    }
+
+    NSString *listPath = [NSString stringWithFormat:@"%s/accounts", home];
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray *files = [fm contentsOfDirectoryAtPath:listPath error:nil];
-    for(NSString *file in files) {
+    if (files == nil) {
+        [self.tableView setSeparatorStyle:UITableViewCellSeparatorStyleSingleLine];
+        return;
+    }
+
+    for (NSString *file in files) {
         NSString *path = [listPath stringByAppendingPathComponent:file];
         BOOL isDir = NO;
         [fm fileExistsAtPath:path isDirectory:(&isDir)];
-        if(!isDir && [file hasSuffix:@".json"]) {
-            [self.accountList addObject:parseJSONFromFile(path)];
+        if (!isDir && [file hasSuffix:@".json"]) {
+            NSDictionary *account = parseJSONFromFile(path);
+            if ([account isKindOfClass:[NSDictionary class]] &&
+                [account[@"username"] isKindOfClass:[NSString class]] &&
+                ((NSString *)account[@"username"]).length > 0) {
+                [self.accountList addObject:account];
+            } else {
+                NSLog(@"[Accounts] Ignoring invalid account file: %@", path);
+            }
         }
     }
 
@@ -76,7 +95,7 @@
     }
 
     cell.imageView.contentMode = UIViewContentModeCenter;
-    [cell.imageView setImageWithURL:[NSURL URLWithString:[selected[@"profilePicURL"] stringByReplacingOccurrencesOfString:@"\\/" withString:@"/"]] placeholderImage:[UIImage imageNamed:@"DefaultAccount"]];
+    [cell.imageView setImageWithURL:[NSURL URLWithString:[selected[@"profilePicURL"] stringByReplacingOccurrencesOfString:@"\\/" withString:@"/"]] placeholderImage:[UIImage imageNamed:@"DefaultAcc"]];
 
     return cell;
 }
@@ -162,7 +181,7 @@
 - (void)actionLoginLocal:(UIView *)sender {
     if (getPrefBool(@"warnings.local_warn")) {
         setPrefBool(@"warnings.local_warn", NO);
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:localize(@"login.warn.title.localmode", nil) message:localize(@"login.warn.message.localmode", nil) preferredStyle:UIAlertControllerStyleActionSheet];
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:localize(@"login.warn.title.localmode", nil) message:localize(@"login.warn.message.localmode", nil) preferredStyle:UIAlertControllerStyleAlert];
         alert.popoverPresentationController.sourceView = sender;
         alert.popoverPresentationController.sourceRect = sender.bounds;
         UIAlertAction *ok = [UIAlertAction actionWithTitle:localize(@"OK", nil) style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {[self actionLoginLocal:sender];}];
@@ -195,7 +214,7 @@
 }
 
 - (void)actionLoginMicrosoft:(UITableViewCell *)sender {
-    NSURL *url = [NSURL URLWithString:@"https://login.live.com/oauth20_authorize.srf?client_id=00000000402b5328&response_type=code&scope=service%3A%3Auser.auth.xboxlive.com%3A%3AMBI_SSL&redirect_url=ms-xal-00000000402b5328%3A%2F%2Fauth"];
+    NSURL *url = [NSURL URLWithString:@"https://login.live.com/oauth20_authorize.srf?client_id=00000000402b5328&response_type=code&scope=service%3A%3Auser.auth.xboxlive.com%3A%3AMBI_SSL&redirect_uri=ms-xal-00000000402b5328%3A%2F%2Fauth&response_mode=query&prompt=select_account"];
 
     self.authVC =
         [[ASWebAuthenticationSession alloc] initWithURL:url
@@ -289,3 +308,4 @@
 }
 
 @end
+
